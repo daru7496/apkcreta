@@ -1,11 +1,8 @@
-
 name: Build Creta 2024 Launcher APK
 
 on:
   push:
-    branches:
-      - main
-      - master
+    branches: [ "main", "master" ]
   workflow_dispatch:
 
 jobs:
@@ -13,27 +10,420 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
       - name: Set up JDK 17
         uses: actions/setup-java@v4
         with:
           java-version: '17'
           distribution: 'temurin'
 
-      - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
+      - name: Create Project and Build APK
+        run: |
+          mkdir -p app/src/main/java/com/custom/cretalauncher
 
-      - name: Grant Gradle permission
-        run: chmod +x gradlew
+          cat << 'EOF' > settings.gradle.kts
+          pluginManagement { repositories { google(); mavenCentral(); gradlePluginPortal() } }
+          dependencyResolutionManagement { repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS); repositories { google(); mavenCentral() } }
+          rootProject.name = "CretaLauncher"
+          include(":app")
+          EOF
+
+          cat << 'EOF' > build.gradle.kts
+          plugins {
+              id("com.android.application") version "8.2.2" apply false
+              id("org.jetbrains.kotlin.android") version "1.9.22" apply false
+          }
+          EOF
+
+          cat << 'EOF' > gradle.properties
+          org.gradle.jvmargs=-Xmx2048m -Dfile.encoding=UTF-8
+          android.useAndroidX=true
+          kotlin.code.style=official
+          android.nonTransitiveRClass=true
+          EOF
+
+          cat << 'EOF' > app/build.gradle.kts
+          plugins {
+              id("com.android.application")
+              id("org.jetbrains.kotlin.android")
+          }
+          android {
+              namespace = "com.custom.cretalauncher"
+              compileSdk = 34
+              defaultConfig { applicationId = "com.custom.cretalauncher"; minSdk = 26; targetSdk = 34; versionCode = 1; versionName = "1.0" }
+              buildFeatures { compose = true }
+              composeOptions { kotlinCompilerExtensionVersion = "1.5.10" }
+              compileOptions { sourceCompatibility = JavaVersion.VERSION_17; targetCompatibility = JavaVersion.VERSION_17 }
+              kotlinOptions { jvmTarget = "17" }
+          }
+          dependencies {
+              implementation("androidx.core:core-ktx:1.12.0")
+              implementation("androidx.activity:activity-compose:1.8.2")
+              implementation(platform("androidx.compose:compose-bom:2024.02.00"))
+              implementation("androidx.compose.ui:ui")
+              implementation("androidx.compose.material3:material3")
+              implementation("androidx.compose.material:material-icons-extended")
+          }
+          EOF
+
+          cat << 'EOF' > app/src/main/AndroidManifest.xml
+          <?xml version="1.0" encoding="utf-8"?>
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+              <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+              <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+              <uses-permission android:name="android.permission.INTERNET" />
+              <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES" />
+              <application android:allowBackup="true" android:label="Creta OEM Launcher" android:theme="@android:style/Theme.DeviceDefault.NoActionBar.Fullscreen">
+                  <activity android:name=".MainActivity" android:exported="true" android:launchMode="singleTask" android:screenOrientation="sensorLandscape" android:stateNotNeeded="true">
+                      <intent-filter>
+                          <action android:name="android.intent.action.MAIN" />
+                          <category android:name="android.intent.category.HOME" />
+                          <category android:name="android.intent.category.DEFAULT" />
+                      </intent-filter>
+                  </activity>
+                  <service android:name=".MediaNotificationListener" android:exported="true" android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE">
+                      <intent-filter><action android:name="android.service.notification.NotificationListenerService" /></intent-filter>
+                  </service>
+              </application>
+          </manifest>
+          EOF
+
+          cat << 'EOF' > app/src/main/java/com/custom/cretalauncher/MainActivity.kt
+          package com.custom.cretalauncher
+
+          import android.content.ComponentName
+          import android.content.Context
+          import android.content.Intent
+          import android.graphics.Bitmap
+          import android.media.MediaMetadata
+          import android.media.session.MediaController
+          import android.media.session.MediaSessionManager
+          import android.media.session.PlaybackState
+          import android.os.Bundle
+          import android.provider.Settings
+          import android.service.notification.NotificationListenerService
+          import androidx.activity.ComponentActivity
+          import androidx.activity.compose.setContent
+          import androidx.compose.foundation.ExperimentalFoundationApi
+          import androidx.compose.foundation.Image
+          import androidx.compose.foundation.background
+          import androidx.compose.foundation.border
+          import androidx.compose.foundation.clickable
+          import androidx.compose.foundation.layout.*
+          import androidx.compose.foundation.lazy.grid.GridCells
+          import androidx.compose.foundation.lazy.grid.LazyHorizontalGrid
+          import androidx.compose.foundation.lazy.grid.items
+          import androidx.compose.foundation.pager.HorizontalPager
+          import androidx.compose.foundation.pager.rememberPagerState
+          import androidx.compose.foundation.shape.CircleShape
+          import androidx.compose.foundation.shape.RoundedCornerShape
+          import androidx.compose.material.icons.Icons
+          import androidx.compose.material.icons.rounded.*
+          import androidx.compose.material3.*
+          import androidx.compose.runtime.*
+          import androidx.compose.ui.Alignment
+          import androidx.compose.ui.Modifier
+          import androidx.compose.ui.draw.clip
+          import androidx.compose.ui.graphics.Brush
+          import androidx.compose.ui.graphics.Color
+          import androidx.compose.ui.graphics.asImageBitmap
+          import androidx.compose.ui.graphics.vector.ImageVector
+          import androidx.compose.ui.platform.LocalContext
+          import androidx.compose.ui.text.font.FontWeight
+          import androidx.compose.ui.text.style.TextOverflow
+          import androidx.compose.ui.unit.dp
+          import androidx.compose.ui.unit.sp
+          import androidx.core.graphics.drawable.toBitmap
+          import kotlinx.coroutines.delay
+          import kotlinx.coroutines.launch
+          import java.text.SimpleDateFormat
+          import java.util.*
+
+          val CretaBgDark = Color(0xFF0A0D12)
+          val CretaCardBg = Color(0xFF131822)
+          val CretaCardBorder = Color(0xFF222A38)
+          val HyundaiCopper = Color(0xFFD98A5B)
+          val HyundaiCyan = Color(0xFF38BDF8)
+          val TextPrimary = Color(0xFFF1F5F9)
+          val TextSecondary = Color(0xFF94A3B8)
+
+          class MediaNotificationListener : NotificationListenerService()
+
+          class MainActivity : ComponentActivity() {
+              override fun onCreate(savedInstanceState: Bundle?) {
+                  super.onCreate(savedInstanceState)
+                  setContent { Creta9InchLauncher() }
+              }
+          }
+
+          @OptIn(ExperimentalFoundationApi::class)
+          @Composable
+          fun Creta9InchLauncher() {
+              val context = LocalContext.current
+              val pagerState = rememberPagerState(pageCount = { 2 })
+              val scope = rememberCoroutineScope()
+
+              Row(modifier = Modifier.fillMaxSize().background(CretaBgDark)) {
+                  LeftStatusRail9Inch(
+                      onHomeClick = { scope.launch { pagerState.animateScrollToPage(0) } },
+                      onAppsClick = { scope.launch { pagerState.animateScrollToPage(1) } },
+                      onSettingsClick = { context.startActivity(Intent(Settings.ACTION_SETTINGS)) }
+                  )
+                  HorizontalPager(
+                      state = pagerState,
+                      modifier = Modifier.fillMaxSize().padding(10.dp)
+                  ) { page ->
+                      when (page) {
+                          0 -> Creta9InchDashboard(onOpenAllApps = { scope.launch { pagerState.animateScrollToPage(1) } })
+                          1 -> CretaAppDrawer9Inch()
+                      }
+                  }
+              }
+          }
+
+          @Composable
+          fun LeftStatusRail9Inch(onHomeClick: () -> Unit, onAppsClick: () -> Unit, onSettingsClick: () -> Unit) {
+              var timeText by remember { mutableStateOf("") }
+              var amPmText by remember { mutableStateOf("") }
+
+              LaunchedEffect(Unit) {
+                  while (true) {
+                      val now = Date()
+                      timeText = SimpleDateFormat("hh:mm", Locale.getDefault()).format(now)
+                      amPmText = SimpleDateFormat("a", Locale.getDefault()).format(now)
+                      delay(1000)
+                  }
+              }
+
+              Column(
+                  modifier = Modifier.width(64.dp).fillMaxHeight().background(Color(0xFF07090D)).border(1.dp, CretaCardBorder).padding(vertical = 12.dp),
+                  horizontalAlignment = Alignment.CenterHorizontally,
+                  verticalArrangement = Arrangement.SpaceBetween
+              ) {
+                  Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                      Text(timeText, color = TextPrimary, fontSize = 18.sp, fontWeight = FontWeight.Bold)
+                      Text(amPmText, color = HyundaiCopper, fontSize = 10.sp, fontWeight = FontWeight.SemiBold)
+                  }
+                  Column(verticalArrangement = Arrangement.spacedBy(20.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                      IconButton(onClick = onHomeClick) { Icon(Icons.Rounded.Home, contentDescription = "Home", tint = HyundaiCopper, modifier = Modifier.size(28.dp)) }
+                      IconButton(onClick = onAppsClick) { Icon(Icons.Rounded.Apps, contentDescription = "Apps", tint = TextPrimary, modifier = Modifier.size(26.dp)) }
+                      IconButton(onClick = onSettingsClick) { Icon(Icons.Rounded.Settings, contentDescription = "Settings", tint = TextSecondary, modifier = Modifier.size(24.dp)) }
+                  }
+                  Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                      Icon(Icons.Rounded.BluetoothConnected, contentDescription = "BT", tint = HyundaiCyan, modifier = Modifier.size(16.dp))
+                      Icon(Icons.Rounded.Wifi, contentDescription = "WiFi", tint = TextPrimary, modifier = Modifier.size(16.dp))
+                  }
+              }
+          }
+
+          @Composable
+          fun Creta9InchDashboard(onOpenAllApps: () -> Unit) {
+              val context = LocalContext.current
+              Row(modifier = Modifier.fillMaxSize(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                  OemCard(
+                      modifier = Modifier.weight(0.56f).fillMaxHeight().clickable {
+                          launchHeadUnitApp(context, listOf("com.google.android.apps.maps", "com.waze", "com.sygic.aura"))
+                      }
+                  ) {
+                      Box(
+                          modifier = Modifier.fillMaxSize().background(Brush.verticalGradient(listOf(Color(0xFF14243B), Color(0xFF0C121C)))).padding(16.dp)
+                      ) {
+                          Column(modifier = Modifier.fillMaxSize(), verticalArrangement = Arrangement.SpaceBetween) {
+                              Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                                  Row(verticalAlignment = Alignment.CenterVertically) {
+                                      Icon(Icons.Rounded.Navigation, contentDescription = null, tint = HyundaiCyan, modifier = Modifier.size(20.dp))
+                                      Spacer(Modifier.width(8.dp))
+                                      Text("CRETA E - NAVIGATION", color = TextSecondary, fontSize = 11.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.1.sp)
+                                  }
+                                  Surface(color = Color(0xFF1E293B), shape = RoundedCornerShape(6.dp)) {
+                                      Text("Google Maps", color = HyundaiCyan, fontSize = 11.sp, modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp))
+                                  }
+                              }
+                              Column(modifier = Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
+                                  Icon(Icons.Rounded.Explore, contentDescription = "Compass", tint = HyundaiCyan.copy(alpha = 0.9f), modifier = Modifier.size(68.dp))
+                                  Spacer(Modifier.height(8.dp))
+                                  Text("Tap to Start Navigation", color = TextPrimary, fontSize = 18.sp, fontWeight = FontWeight.SemiBold)
+                                  Text("Key Largo 980 - 9 Inch Display", color = TextSecondary, fontSize = 12.sp)
+                              }
+                              Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                  QuickChip(icon = Icons.Rounded.LocalGasStation, label = "Petrol Pump", modifier = Modifier.weight(1f))
+                                  QuickChip(icon = Icons.Rounded.Restaurant, label = "Food / Tea", modifier = Modifier.weight(1f))
+                              }
+                          }
+                      }
+                  }
+
+                  Column(modifier = Modifier.weight(0.44f).fillMaxHeight(), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                      OemCard(modifier = Modifier.weight(0.56f).fillMaxWidth()) { CompactMediaCard() }
+                      OemCard(modifier = Modifier.weight(0.44f).fillMaxWidth()) {
+                          Row(modifier = Modifier.fillMaxSize().padding(horizontal = 8.dp), horizontalArrangement = Arrangement.SpaceEvenly, verticalAlignment = Alignment.CenterVertically) {
+                              OemTileButton(Icons.Rounded.Radio, "FM Radio") {
+                                  launchHeadUnitApp(context, listOf("com.ts.MainUI", "com.qf.radio", "com.xyauto.radio", "com.android.fmradio"))
+                              }
+                              OemTileButton(Icons.Rounded.PhoneInTalk, "BT Call") {
+                                  launchHeadUnitApp(context, listOf("com.ts.bt", "com.qf.bt", "com.xyauto.bt"), Intent(Intent.ACTION_DIAL))
+                              }
+                              OemTileButton(Icons.Rounded.Equalizer, "DSP") {
+                                  launchHeadUnitApp(context, listOf("com.ts.dsp", "com.qf.dsp", "com.xyauto.eq"), Intent(Settings.ACTION_SOUND_SETTINGS))
+                              }
+                              OemTileButton(Icons.Rounded.GridView, "All Apps") { onOpenAllApps() }
+                          }
+                      }
+                  }
+              }
+          }
+
+          @Composable
+          fun CompactMediaCard() {
+              val context = LocalContext.current
+              var trackTitle by remember { mutableStateOf("No Audio Active") }
+              var artistName by remember { mutableStateOf("Play Spotify, YT Music or BT") }
+              var isPlaying by remember { mutableStateOf(false) }
+              var activeController by remember { mutableStateOf<MediaController?>(null) }
+
+              LaunchedEffect(Unit) {
+                  val msm = context.getSystemService(Context.MEDIA_SESSION_SERVICE) as MediaSessionManager
+                  val listenerComponent = ComponentName(context, MediaNotificationListener::class.java)
+                  while (true) {
+                      try {
+                          val controller = msm.getActiveSessions(listenerComponent).firstOrNull()
+                          activeController = controller
+                          if (controller != null) {
+                              val meta = controller.metadata
+                              trackTitle = meta?.getString(MediaMetadata.METADATA_KEY_TITLE) ?: "Bluetooth Audio"
+                              artistName = meta?.getString(MediaMetadata.METADATA_KEY_ARTIST) ?: "Connected Device"
+                              isPlaying = controller.playbackState?.state == PlaybackState.STATE_PLAYING
+                          }
+                      } catch (_: SecurityException) {
+                          trackTitle = "Tap to Enable Media Sync"
+                          artistName = "Grant Notification Access"
+                      }
+                      delay(1000)
+                  }
+              }
+
+              Column(
+                  modifier = Modifier.fillMaxSize().clickable {
+                      if (trackTitle.contains("Enable Media")) context.startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS))
+                  }.padding(14.dp),
+                  verticalArrangement = Arrangement.SpaceBetween
+              ) {
+                  Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                      Icon(Icons.Rounded.MusicNote, contentDescription = null, tint = HyundaiCopper, modifier = Modifier.size(18.dp))
+                      Spacer(Modifier.width(6.dp))
+                      Text("MEDIA", color = TextSecondary, fontSize = 11.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.1.sp)
+                  }
+                  Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                      Box(modifier = Modifier.size(54.dp).clip(RoundedCornerShape(12.dp)).background(Color(0xFF1E2634)), contentAlignment = Alignment.Center) {
+                          Icon(Icons.Rounded.Album, contentDescription = null, tint = HyundaiCopper, modifier = Modifier.size(32.dp))
+                      }
+                      Spacer(Modifier.width(12.dp))
+                      Column(modifier = Modifier.weight(1f)) {
+                          Text(trackTitle, color = TextPrimary, fontSize = 15.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                          Text(artistName, color = TextSecondary, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                      }
+                  }
+                  Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly, verticalAlignment = Alignment.CenterVertically) {
+                      IconButton(onClick = { activeController?.transportControls?.skipToPrevious() }) {
+                          Icon(Icons.Rounded.SkipPrevious, contentDescription = "Prev", tint = TextPrimary, modifier = Modifier.size(28.dp))
+                      }
+                      Box(
+                          modifier = Modifier.size(44.dp).clip(CircleShape).background(HyundaiCopper).clickable {
+                              if (isPlaying) activeController?.transportControls?.pause() else activeController?.transportControls?.play()
+                          },
+                          contentAlignment = Alignment.Center
+                      ) {
+                          Icon(if (isPlaying) Icons.Rounded.Pause else Icons.Rounded.PlayArrow, contentDescription = "Play/Pause", tint = Color.Black, modifier = Modifier.size(26.dp))
+                      }
+                      IconButton(onClick = { activeController?.transportControls?.skipToNext() }) {
+                          Icon(Icons.Rounded.SkipNext, contentDescription = "Next", tint = TextPrimary, modifier = Modifier.size(28.dp))
+                      }
+                  }
+              }
+          }
+
+          @Composable
+          fun CretaAppDrawer9Inch() {
+              val context = LocalContext.current
+              val pm = context.packageManager
+              val apps = remember {
+                  val intent = Intent(Intent.ACTION_MAIN, null).apply { addCategory(Intent.CATEGORY_LAUNCHER) }
+                  pm.queryIntentActivities(intent, 0).map {
+                      AppItem(it.loadLabel(pm).toString(), it.activityInfo.packageName, it.loadIcon(pm).toBitmap(96, 96))
+                  }.sortedBy { it.label.lowercase() }
+              }
+              OemCard(modifier = Modifier.fillMaxSize()) {
+                  LazyHorizontalGrid(
+                      rows = GridCells.Fixed(2),
+                      contentPadding = PaddingValues(18.dp),
+                      horizontalArrangement = Arrangement.spacedBy(20.dp),
+                      verticalArrangement = Arrangement.spacedBy(14.dp)
+                  ) {
+                      items(apps) { app ->
+                          Column(
+                              modifier = Modifier.width(88.dp).clickable { pm.getLaunchIntentForPackage(app.packageName)?.let { context.startActivity(it) } },
+                              horizontalAlignment = Alignment.CenterHorizontally,
+                              verticalArrangement = Arrangement.Center
+                          ) {
+                              Image(bitmap = app.icon.asImageBitmap(), contentDescription = app.label, modifier = Modifier.size(54.dp).clip(RoundedCornerShape(14.dp)))
+                              Spacer(Modifier.height(6.dp))
+                              Text(app.label, color = TextPrimary, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                          }
+                      }
+                  }
+              }
+          }
+
+          fun launchHeadUnitApp(context: Context, candidatePackages: List<String>, fallbackIntent: Intent? = null) {
+              val pm = context.packageManager
+              for (pkg in candidatePackages) {
+                  val intent = pm.getLaunchIntentForPackage(pkg)
+                  if (intent != null) { context.startActivity(intent); return }
+              }
+              fallbackIntent?.let { context.startActivity(it) }
+          }
+
+          @Composable
+          fun OemCard(modifier: Modifier = Modifier, content: @Composable () -> Unit) {
+              Surface(modifier = modifier.border(1.dp, CretaCardBorder, RoundedCornerShape(16.dp)), color = CretaCardBg, shape = RoundedCornerShape(16.dp), content = content)
+          }
+
+          @Composable
+          fun QuickChip(icon: ImageVector, label: String, modifier: Modifier = Modifier) {
+              Row(
+                  modifier = modifier.clip(RoundedCornerShape(10.dp)).background(Color(0xFF1B2432)).padding(vertical = 8.dp, horizontal = 8.dp),
+                  verticalAlignment = Alignment.CenterVertically,
+                  horizontalArrangement = Arrangement.Center
+              ) {
+                  Icon(icon, contentDescription = label, tint = HyundaiCopper, modifier = Modifier.size(16.dp))
+                  Spacer(Modifier.width(6.dp))
+                  Text(label, color = TextPrimary, fontSize = 12.sp, maxLines = 1)
+              }
+          }
+
+          @Composable
+          fun OemTileButton(icon: ImageVector, label: String, onClick: () -> Unit) {
+              Column(modifier = Modifier.clip(RoundedCornerShape(10.dp)).clickable(onClick = onClick).padding(6.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                  Box(modifier = Modifier.size(42.dp).clip(RoundedCornerShape(12.dp)).background(Color(0xFF1E2634)), contentAlignment = Alignment.Center) {
+                      Icon(icon, contentDescription = label, tint = HyundaiCyan, modifier = Modifier.size(22.dp))
+                  }
+                  Spacer(Modifier.height(4.dp))
+                  Text(label, color = TextSecondary, fontSize = 11.sp, maxLines = 1)
+              }
+          }
+
+          data class AppItem(val label: String, val packageName: String, val icon: Bitmap)
+          EOF
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.5'
 
       - name: Build Debug APK
-        run: ./gradlew assembleDebug
+        run: gradle assembleDebug --no-daemon
 
       - name: Upload Creta Launcher APK
         uses: actions/upload-artifact@v4
         with:
           name: Creta-2024-OEM-Launcher-APK
           path: app/build/outputs/apk/debug/app-debug.apk
-          if-no-files-found: error
